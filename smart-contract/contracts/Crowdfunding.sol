@@ -17,8 +17,8 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
     uint32 public refundingDeadline;
 
     mapping(address => uint256) public contributions;
-    mapping(uint256 => mapping(address => bool)) requestsVotingHistory;
-    bool isDestroy;
+    mapping(uint256 => mapping(address => bool)) public requestsVotingHistory;
+    bool public isDestroy;
 
     struct FundingRequest {
         string purpose;
