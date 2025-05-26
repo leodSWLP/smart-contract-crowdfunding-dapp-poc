@@ -8,6 +8,7 @@ library CrowdfundingCommon {
     // Custom errors
     error InsufficientContribution(uint256 minimumContribution);
     error FundingPeriodEnded();
+    error FundingPeriodRefundIsNotAllowed();
     error FundingGoalReached();
     error FundingGoalNotReached();
     error InsufficientFunds(uint256 avaliable, uint256 requested);

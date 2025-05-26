@@ -194,6 +194,9 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         if (contributions[msg.sender] == 0) {
             revert CrowdfundingCommon.NotContributor();
         }
+        if (block.timestamp < fundingDeadline) {
+            revert CrowdfundingCommon.FundingPeriodRefundIsNotAllowed();
+        }
         if (
             block.timestamp > fundingDeadline &&
             totalContributions > targetFunding
