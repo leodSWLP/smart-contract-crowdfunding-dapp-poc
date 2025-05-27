@@ -2,9 +2,17 @@ import { ethers } from 'hardhat';
 import { expect } from 'chai';
 import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { SignerWithAddress } from '@nomicfoundation/hardhat-ethers/signers';
-import { Crowdfunding, Crowdfunding__factory } from '../typechain-types';
-import { days } from '@nomicfoundation/hardhat-network-helpers/dist/src/helpers/time/duration';
-import { request } from 'http';
+import {
+  Crowdfunding,
+  Crowdfunding__factory,
+  CrowdfundingCommon__factory,
+} from '../typechain-types';
+
+enum RequestStatus {
+  PROCESSING = 0,
+  REJECTED = 1,
+  PAYOUT = 2,
+}
 
 describe('Crowdfunding Contract', () => {
   let CrowdfundingContractFactory: Crowdfunding__factory;
@@ -13,6 +21,7 @@ describe('Crowdfunding Contract', () => {
   let contributor1: SignerWithAddress;
   let contributor2: SignerWithAddress;
   let contributor3: SignerWithAddress;
+  let contributor4: SignerWithAddress;
   let recipient: SignerWithAddress;
   const TITLE = 'Test Crowdfunding';
   const DESCRIPTION = 'A test crowdfunding campaign';
@@ -24,7 +33,7 @@ describe('Crowdfunding Contract', () => {
   let deploymentTime;
 
   beforeEach(async () => {
-    [owner, contributor1, contributor2, contributor3, recipient] =
+    [owner, contributor1, contributor2, contributor3, contributor4, recipient] =
       await ethers.getSigners();
     CrowdfundingContractFactory = await ethers.getContractFactory(
       'Crowdfunding',
@@ -291,6 +300,221 @@ describe('Crowdfunding Contract', () => {
             ),
         ).to.be.revertedWithCustomError(crowdfunding, 'FundingGoalNotReached');
       });
+    });
+  });
+
+  describe('Voting', () => {
+    beforeEach(async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor2)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor3)
+        .contribute({ value: ethers.parseEther('40') });
+      await crowdfunding
+        .connect(contributor4)
+        .contribute({ value: ethers.parseEther('40') });
+
+      await time.increaseTo(deploymentTime + 31 * ONE_DAY);
+      await crowdfunding
+        .connect(owner)
+        .createFundingRequest(
+          'Test',
+          ethers.parseEther('10'),
+          recipient.address,
+        );
+    });
+
+    it('should allow contributor to vote', async () => {
+      await expect(crowdfunding.connect(contributor1).voteForRequest(0, true))
+        .to.emit(crowdfunding, 'VoteCast')
+        .withArgs(0, contributor1.address, true);
+
+      const requests = await crowdfunding.listFundingRequest();
+      expect(requests[0].approveVote).to.be.equal(1);
+      expect(requests[0].totalVote).to.be.equal(1);
+      expect(await crowdfunding.requestsVotingHistory(0, contributor1.address))
+        .to.be.true;
+    });
+
+    it('should revert if not a contributor', async () => {
+      await expect(
+        crowdfunding.connect(owner).voteForRequest(0, false),
+      ).to.revertedWithCustomError(crowdfunding, 'NotContributor');
+    });
+
+    it('should revert if voting period ended', async () => {
+      await time.increase(31 * ONE_DAY);
+      await expect(
+        crowdfunding.connect(contributor1).voteForRequest(0, false),
+      ).to.revertedWithCustomError(crowdfunding, 'RequestVotingPeriodEnded');
+    });
+
+    it('should revert if already voted', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await expect(
+        crowdfunding.connect(contributor1).voteForRequest(0, false),
+      ).to.revertedWithCustomError(crowdfunding, 'AlreadyVoted');
+    });
+
+    it('should revert if contract is destroyed', async () => {
+      await time.increase(
+        Number(await crowdfunding.refundingDeadline()) + ONE_DAY,
+      );
+      await crowdfunding.connect(owner).destroyContract();
+      await expect(
+        crowdfunding.connect(contributor1).voteForRequest(0, true),
+      ).to.revertedWithCustomError(crowdfunding, 'ContractAlreadyDestroyed');
+    });
+  });
+
+  describe('Finalizing Requests', () => {
+    beforeEach(async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor2)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor3)
+        .contribute({ value: ethers.parseEther('40') });
+      await crowdfunding
+        .connect(contributor4)
+        .contribute({ value: ethers.parseEther('40') });
+
+      await time.increaseTo(deploymentTime + 31 * ONE_DAY);
+
+      await crowdfunding
+        .connect(owner)
+        .createFundingRequest(
+          'Test',
+          ethers.parseEther('10'),
+          recipient.address,
+        );
+    });
+
+    it('should payout if approved by majority', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await crowdfunding.connect(contributor2).voteForRequest(0, true);
+      await crowdfunding.connect(contributor3).voteForRequest(0, false);
+      await time.increase(31 * ONE_DAY);
+
+      const recipientBalanceBefore = await ethers.provider.getBalance(
+        recipient.address,
+      );
+
+      await expect(crowdfunding.connect(owner).finalizeRequest(0))
+        .to.emit(crowdfunding, 'FundingRequestUpdated')
+        .withArgs(0, RequestStatus.PAYOUT)
+        .to.emit(crowdfunding, 'PayoutCompleted')
+        .withArgs(0, ethers.parseEther('10'), recipient.address);
+
+      const requests = await crowdfunding.listFundingRequest();
+      expect(requests[0].status).to.equal(RequestStatus.PAYOUT);
+      const recipientBalanceAfter = await ethers.provider.getBalance(
+        recipient.address,
+      );
+
+      expect(recipientBalanceBefore + ethers.parseEther('10')).to.equal(
+        recipientBalanceAfter,
+      );
+    });
+
+    it('should reject if not approved by majority', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await crowdfunding.connect(contributor2).voteForRequest(0, true);
+      await crowdfunding.connect(contributor3).voteForRequest(0, false);
+      await crowdfunding.connect(contributor4).voteForRequest(0, false);
+      await time.increase(31 * ONE_DAY);
+
+      await expect(crowdfunding.connect(owner).finalizeRequest(0))
+        .to.emit(crowdfunding, 'FundingRequestUpdated')
+        .withArgs(0, RequestStatus.REJECTED);
+
+      const requests = await crowdfunding.listFundingRequest();
+      expect(requests[0].status).to.equal(RequestStatus.REJECTED);
+    });
+
+    it('should reject if no votes cast', async () => {
+      await time.increase(31 * ONE_DAY);
+
+      await expect(crowdfunding.connect(owner).finalizeRequest(0))
+        .to.emit(crowdfunding, 'FundingRequestUpdated')
+        .withArgs(0, RequestStatus.REJECTED);
+
+      const requests = await crowdfunding.listFundingRequest();
+      expect(requests[0].status).to.equal(RequestStatus.REJECTED);
+    });
+
+    it('should revert if request is not processing', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await time.increase(31 * ONE_DAY);
+
+      await crowdfunding.connect(owner).finalizeRequest(0);
+      await expect(
+        crowdfunding.connect(owner).finalizeRequest(0),
+      ).to.revertedWithCustomError(crowdfunding, 'RequestNotProcessing');
+    });
+
+    it('should revert if voting period not ended', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+
+      await expect(
+        crowdfunding.connect(owner).finalizeRequest(0),
+      ).to.be.revertedWithCustomError(
+        crowdfunding,
+        'RequestVotingPeriodNotEnded',
+      );
+    });
+
+    it('should revert if not owner', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await time.increase(31 * ONE_DAY);
+      await expect(
+        crowdfunding.connect(contributor1).finalizeRequest(0),
+      ).to.be.revertedWithCustomError(
+        crowdfunding,
+        'OwnableUnauthorizedAccount',
+      );
+    });
+
+    it('should revert if insufficient funds for payout', async () => {
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+      await crowdfunding.connect(contributor2).voteForRequest(0, true);
+
+      await crowdfunding
+        .connect(owner)
+        .createFundingRequest(
+          'Test2',
+          ethers.parseEther('140'),
+          recipient.address,
+        );
+      await crowdfunding.connect(contributor1).voteForRequest(1, true);
+      await crowdfunding.connect(contributor2).voteForRequest(1, true);
+      await time.increase(31 * ONE_DAY);
+
+      await crowdfunding.connect(owner).finalizeRequest(0); //Total: 140 ETH, Payout 10 ETH, Remain 130 ETH
+      await expect(
+        crowdfunding.connect(owner).finalizeRequest(1), //Remain 130 ETH, Require Payout 140 ETH
+      ).to.be.revertedWithCustomError(crowdfunding, 'InsufficientFunds');
+    });
+
+    it('should revert if contract is destroyed', async () => {
+      await time.increaseTo(
+        deploymentTime +
+          (FUNDING_MONTHS + TRANSFER_REQUEST_MONTHS) * 30 * ONE_DAY +
+          45 * ONE_DAY +
+          365 * ONE_DAY +
+          ONE_DAY,
+      );
+      await crowdfunding.connect(owner).destroyContract();
+      await expect(
+        crowdfunding.connect(owner).finalizeRequest(0),
+      ).to.be.revertedWithCustomError(crowdfunding, 'ContractAlreadyDestroyed');
     });
   });
 });

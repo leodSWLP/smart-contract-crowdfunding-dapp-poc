@@ -6,7 +6,7 @@
     "@types/chai": "^4.3.20",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.15.21",
-    "hardhat": "^2.24.0",
+    "hardhat": "^2.24.1",
     "ts-node": "^10.9.2",
     "typechain": "^8.3.2",
     "typescript": "^5.8.3"

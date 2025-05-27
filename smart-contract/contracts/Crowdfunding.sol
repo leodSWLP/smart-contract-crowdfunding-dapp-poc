@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "./CrowdfundingCommon.sol";
+import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
+import './CrowdfundingCommon.sol';
 
 contract Crowdfunding is ReentrancyGuard, Ownable {
     string public title;
@@ -37,6 +37,12 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         _;
     }
 
+    modifier onlyContributor() {
+        if (contributions[msg.sender] == 0)
+            revert CrowdfundingCommon.NotContributor();
+        _;
+    }
+
     constructor(
         string memory _title,
         string memory _description,
@@ -47,11 +53,11 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         address owner
     ) Ownable(owner) {
         if (fundingMonths < 1 || fundingMonths > 6) {
-            revert CrowdfundingCommon.InvalidRange("fundingMonths", 1, 6);
+            revert CrowdfundingCommon.InvalidRange('fundingMonths', 1, 6);
         }
         if (transferRequestMonths < 3 || transferRequestMonths > 24) {
             revert CrowdfundingCommon.InvalidRange(
-                "transferRequestMonths",
+                'transferRequestMonths',
                 3,
                 24
             );
@@ -98,7 +104,7 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
             block.timestamp > transferRequestDeadline
         ) {
             revert CrowdfundingCommon.InvalidDuration(
-                "createFundingRequest",
+                'createFundingRequest',
                 fundingDeadline,
                 transferRequestDeadline
             );
@@ -125,16 +131,13 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         );
     }
 
-    function voteForRequest(uint256 _requestId, bool _voteFor) public isActive {
-        if (contributions[msg.sender] == 0) {
-            revert CrowdfundingCommon.NotContributor();
-        }
+    function voteForRequest(
+        uint256 _requestId,
+        bool _voteFor
+    ) public onlyContributor isActive {
         FundingRequest storage request = fundingRequests[_requestId];
         if (block.timestamp > request.deadline) {
             revert CrowdfundingCommon.RequestVotingPeriodEnded();
-        }
-        if (request.status != CrowdfundingCommon.RequestStatus.Processing) {
-            revert CrowdfundingCommon.RequestNotProcessing(_requestId);
         }
         if (requestsVotingHistory[_requestId][msg.sender]) {
             revert CrowdfundingCommon.AlreadyVoted();
@@ -149,12 +152,9 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         emit CrowdfundingCommon.VoteCast(_requestId, msg.sender, _voteFor);
     }
 
-    function finalizeRequest(uint32 _requestId)
-        public
-        onlyOwner
-        nonReentrant
-        isActive
-    {
+    function finalizeRequest(
+        uint32 _requestId
+    ) public onlyOwner nonReentrant isActive {
         FundingRequest storage request = fundingRequests[_requestId];
         if (request.status != CrowdfundingCommon.RequestStatus.Processing) {
             revert CrowdfundingCommon.RequestNotProcessing(_requestId);
@@ -162,10 +162,9 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         if (block.timestamp < request.deadline) {
             revert CrowdfundingCommon.RequestVotingPeriodNotEnded();
         }
-        uint256 approvalPercentage = (request.approveVote * 100) /
-            request.totalVote;
 
-        bool isApproved = request.totalVote > 0 && approvalPercentage > 50;
+        bool isApproved = request.totalVote != 0 &&
+            ((request.approveVote * 100) / request.totalVote > 50);
 
         if (isApproved) {
             payoutRequest(_requestId, request);
@@ -182,18 +181,16 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         return fundingRequests;
     }
 
-    function getFundingRequestCount()
-        external
-        view
-        returns (uint)
-    {
+    function getFundingRequestCount() external view returns (uint) {
         return fundingRequests.length;
     }
 
-    function refundIfTargetNotMet() external isActive nonReentrant {
-        if (contributions[msg.sender] == 0) {
-            revert CrowdfundingCommon.NotContributor();
-        }
+    function refundIfTargetNotMet()
+        external
+        isActive
+        onlyContributor
+        nonReentrant
+    {
         if (block.timestamp < fundingDeadline) {
             revert CrowdfundingCommon.FundingPeriodRefundIsNotAllowed();
         }
@@ -210,17 +207,18 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         emit CrowdfundingCommon.RefundTransferred(msg.sender, refundAmount);
     }
 
-    function refundRemainingBalance() external isActive nonReentrant {
-        if (contributions[msg.sender] == 0) {
-            revert CrowdfundingCommon.NotContributor();
-        }
-
+    function refundRemainingBalance()
+        external
+        isActive
+        onlyContributor
+        nonReentrant
+    {
         if (
             block.timestamp < refundingStart ||
             block.timestamp >= refundingDeadline
         ) {
             revert CrowdfundingCommon.InvalidDuration(
-                "refund",
+                'refund',
                 refundingStart,
                 refundingDeadline
             );
@@ -245,9 +243,10 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         payable(owner()).transfer(remainingBalance);
     }
 
-    function payoutRequest(uint32 _requestId, FundingRequest storage request)
-        internal
-    {
+    function payoutRequest(
+        uint32 _requestId,
+        FundingRequest storage request
+    ) internal {
         uint256 balance = getBalance();
         if (balance < request.amount) {
             revert CrowdfundingCommon.InsufficientFunds(
@@ -269,9 +268,10 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         );
     }
 
-    function rejectRequest(uint32 _requestId, FundingRequest storage request)
-        internal
-    {
+    function rejectRequest(
+        uint32 _requestId,
+        FundingRequest storage request
+    ) internal {
         request.status = CrowdfundingCommon.RequestStatus.Rejected;
         emit CrowdfundingCommon.FundingRequestUpdated(
             _requestId,

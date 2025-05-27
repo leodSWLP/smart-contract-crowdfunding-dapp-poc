@@ -11,7 +11,7 @@ library CrowdfundingCommon {
     error FundingPeriodRefundIsNotAllowed();
     error FundingGoalReached();
     error FundingGoalNotReached();
-    error InsufficientFunds(uint256 avaliable, uint256 requested);
+    error InsufficientFunds(uint256 available, uint256 requested);
     error RequestNotProcessing(uint256 requestId);
     error NotContributor();
     error RequestVotingPeriodEnded();
