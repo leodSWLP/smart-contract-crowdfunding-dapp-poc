@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "./Crowdfunding.sol";
+import '@openzeppelin/contracts/access/Ownable.sol';
+import './Crowdfunding.sol';
 
 contract CrowdFundingFactory is Ownable {
-    uint maxCrowdfundingCount;
-    bool isPause;
+    uint public maxCrowdfundingCount;
+    bool public isPause;
     address[] public crowdfundingContracts;
 
     error FactoryContractIsPaused();
@@ -27,7 +27,7 @@ contract CrowdFundingFactory is Ownable {
         address indexed owner
     );
 
-    constructor(uint256 _maxCrowdfundingCount) Ownable(msg.sender){
+    constructor(uint256 _maxCrowdfundingCount) Ownable(msg.sender) {
         maxCrowdfundingCount = _maxCrowdfundingCount;
     }
 
@@ -39,7 +39,7 @@ contract CrowdFundingFactory is Ownable {
         uint8 _fundingMonths,
         uint8 _transferRequestMonths
     ) public isActive returns (address) {
-        if (crowdfundingContracts.length + 1 > maxCrowdfundingCount)  {
+        if (crowdfundingContracts.length + 1 > maxCrowdfundingCount) {
             revert TooManyCrowdfundingContract(maxCrowdfundingCount);
         }
 
@@ -66,11 +66,18 @@ contract CrowdFundingFactory is Ownable {
         return address(newCrowdfunding);
     }
 
-    function getCrowdfundingContracts() external view returns (address[] memory) {
+    function getCrowdfundingContracts()
+        external
+        view
+        returns (address[] memory)
+    {
         return crowdfundingContracts;
     }
 
-        function getCrowdFundingCount() external view returns (uint256) {
+    function pause(bool _isPause) public onlyOwner {
+        isPause = _isPause;
+    }
+    function getCrowdFundingCount() external view returns (uint256) {
         return crowdfundingContracts.length;
     }
 }

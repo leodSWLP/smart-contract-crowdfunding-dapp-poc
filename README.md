@@ -30,7 +30,7 @@ To learn dApp development with React.js, TypeScript, Hardhat, Solidity, and web3
 ## TODO List
 
 - [x] Build Crowdfunding and CrowdfundignFactory contract
-- [ ] Smart contract thorough testing
+- [x] Smart contract thorough testing
 - [ ] React Home page interact with CrowdfundignFactory contract to list campaign and create campaign
 - [ ] Click Campaign route to detail page interact with Crowdfunding contract, manage your own campaign or become contributor
 - [ ] Setup docker-compose local for local testing
