@@ -2,17 +2,20 @@ import { ethers } from 'hardhat';
 import { expect } from 'chai';
 import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { SignerWithAddress } from '@nomicfoundation/hardhat-ethers/signers';
-import {
-  Crowdfunding,
-  Crowdfunding__factory,
-  CrowdfundingCommon__factory,
-} from '../typechain-types';
+import { Crowdfunding, Crowdfunding__factory } from '../typechain-types';
+import { ContractTransactionResponse } from 'ethers';
 
 enum RequestStatus {
   PROCESSING = 0,
   REJECTED = 1,
   PAYOUT = 2,
 }
+
+const calculateGasUsed = async (transaction: ContractTransactionResponse) => {
+  const receipt = await transaction.wait();
+  const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
+  return gasUsed;
+};
 
 describe('Crowdfunding Contract', () => {
   let CrowdfundingContractFactory: Crowdfunding__factory;
@@ -33,6 +36,7 @@ describe('Crowdfunding Contract', () => {
   let deploymentTime;
 
   beforeEach(async () => {
+    await ethers.provider.send('hardhat_reset', []);
     [owner, contributor1, contributor2, contributor3, contributor4, recipient] =
       await ethers.getSigners();
     CrowdfundingContractFactory = await ethers.getContractFactory(
@@ -53,10 +57,6 @@ describe('Crowdfunding Contract', () => {
     const deployTx = crowdfunding.deploymentTransaction();
     const block = await ethers.provider.getBlock(deployTx?.blockNumber ?? 0);
 
-    // const blockNumBefore = await ethers.provider.getBlockNumber();
-    // const blockBefore = await ethers.provider.getBlock(blockNumBefore);
-    // const timestampBefore = blockBefore!.timestamp;
-    // console.log('timestampBefore: ', timestampBefore);
     deploymentTime = block!.timestamp;
   });
 
@@ -515,6 +515,229 @@ describe('Crowdfunding Contract', () => {
       await expect(
         crowdfunding.connect(owner).finalizeRequest(0),
       ).to.be.revertedWithCustomError(crowdfunding, 'ContractAlreadyDestroyed');
+    });
+  });
+
+  describe('Refund If Target Not Met', () => {
+    beforeEach(async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor2)
+        .contribute({ value: ethers.parseEther('30') });
+    });
+
+    it('should refund it target not met', async () => {
+      await time.increase(31 * ONE_DAY);
+
+      const contributorBalanceBefore = await ethers.provider.getBalance(
+        contributor1.address,
+      );
+      const transaction = await crowdfunding
+        .connect(contributor1)
+        .refundIfTargetNotMet();
+      const receipt = await transaction.wait();
+
+      const gasUsed = await calculateGasUsed(transaction);
+
+      expect(await crowdfunding.contributions(contributor1.address)).to.equal(
+        0,
+      );
+      const contributorBalanceAfter = await ethers.provider.getBalance(
+        contributor1.address,
+      );
+      expect(contributorBalanceBefore - gasUsed + ethers.parseEther('30'));
+
+      await expect(receipt)
+        .to.emit(crowdfunding, 'RefundTransferred')
+        .withArgs(contributor1.address, ethers.parseEther('30'));
+    });
+
+    it('should revert if funding period is not over', async () => {
+      await time.increase(15 * ONE_DAY);
+
+      await expect(
+        crowdfunding.connect(contributor1).refundIfTargetNotMet(),
+      ).to.revertedWithCustomError(
+        crowdfunding,
+        'FundingPeriodRefundIsNotAllowed',
+      );
+    });
+
+    it('should revert if target Met', async () => {
+      await crowdfunding
+        .connect(contributor3)
+        .contribute({ value: ethers.parseEther('40') });
+      await time.increase(31 * ONE_DAY);
+
+      await expect(
+        crowdfunding.connect(contributor1).refundIfTargetNotMet(),
+      ).to.revertedWithCustomError(crowdfunding, 'FundingGoalReached');
+    });
+
+    it('should revert if not a contributor', async () => {
+      await expect(
+        crowdfunding.connect(contributor4).refundIfTargetNotMet(),
+      ).to.revertedWithCustomError(crowdfunding, 'NotContributor');
+    });
+
+    it('should revert if contract is destroyed', async () => {
+      const fundingDeadline = await crowdfunding.refundingDeadline();
+      await time.increase(Number(fundingDeadline) + ONE_DAY);
+      await crowdfunding.connect(owner).destroyContract();
+      await expect(
+        crowdfunding.connect(contributor1).refundIfTargetNotMet(),
+      ).to.revertedWithCustomError(crowdfunding, 'ContractAlreadyDestroyed');
+    });
+  });
+
+  describe('Remaining Balance Refund', () => {
+    beforeEach(async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await crowdfunding
+        .connect(contributor2)
+        .contribute({ value: ethers.parseEther('30') });
+
+      await crowdfunding
+        .connect(contributor3)
+        .contribute({ value: ethers.parseEther('40') });
+
+      await time.increase(FUNDING_MONTHS * 31 * ONE_DAY);
+    });
+
+    it('should refund remaining balance proportionally', async () => {
+      const totalBalance = await crowdfunding.getBalance();
+      const contributor1Contribution = await crowdfunding.contributions(
+        contributor1.address,
+      );
+
+      await crowdfunding
+        .connect(owner)
+        .createFundingRequest(
+          'Test',
+          ethers.parseEther('10'),
+          recipient.address,
+        );
+      await crowdfunding.connect(contributor1).voteForRequest(0, true);
+
+      await time.increase(31 * ONE_DAY);
+
+      await expect(crowdfunding.connect(owner).finalizeRequest(0))
+        .to.emit(crowdfunding, 'PayoutCompleted')
+        .withArgs(0, ethers.parseEther('10'), recipient.address);
+
+      const contractRemainingBalance = await crowdfunding.getBalance();
+
+      await time.increase((TRANSFER_REQUEST_MONTHS * 31 + 45) * ONE_DAY);
+
+      const contributorBalanceBefore = await ethers.provider.getBalance(
+        contributor1,
+      );
+      const transaction = await crowdfunding
+        .connect(contributor1)
+        .refundRemainingBalance();
+      const gasUsed = await calculateGasUsed(transaction);
+
+      const contributorBalanceAfter = await ethers.provider.getBalance(
+        contributor1,
+      );
+      const expectedRefund =
+        (contributor1Contribution * contractRemainingBalance) / totalBalance;
+
+      expect(contributorBalanceBefore - gasUsed + expectedRefund).to.equal(
+        contributorBalanceAfter,
+      );
+    });
+
+    it('should revert if not a contributor', async () => {
+      await expect(
+        crowdfunding.connect(contributor4).refundRemainingBalance(),
+      ).to.revertedWithCustomError(crowdfunding, 'NotContributor');
+    });
+
+    it('should revert if contract is destroyed', async () => {
+      const fundingDeadline = await crowdfunding.refundingDeadline();
+      await time.increase(Number(fundingDeadline) + ONE_DAY);
+      await crowdfunding.connect(owner).destroyContract();
+      await expect(
+        crowdfunding.connect(contributor1).refundRemainingBalance(),
+      ).to.revertedWithCustomError(crowdfunding, 'ContractAlreadyDestroyed');
+    });
+
+    it('should revert if outside refund period', async () => {
+      const refundingDeadline = await crowdfunding.refundingDeadline();
+      await time.increase(Number(refundingDeadline) + ONE_DAY);
+      await expect(
+        crowdfunding.connect(contributor1).refundRemainingBalance(),
+      ).to.revertedWithCustomError(crowdfunding, 'InvalidDuration');
+    });
+  });
+
+  describe('Contract Destruction', () => {
+    it('should destroy contract and transfer remaining balance to owner', async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await time.increaseTo(
+        deploymentTime +
+          (FUNDING_MONTHS + TRANSFER_REQUEST_MONTHS) * 30 * ONE_DAY +
+          45 * ONE_DAY +
+          365 * ONE_DAY +
+          ONE_DAY,
+      );
+      const ownerBalanceBefore = await ethers.provider.getBalance(
+        owner.address,
+      );
+      const contractBalance = await crowdfunding.getBalance();
+
+      const tx = await crowdfunding.connect(owner).destroyContract();
+      const receipt = await tx.wait();
+      const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
+
+      expect(await crowdfunding.isDestroy()).to.be.true;
+      const ownerBalanceAfter = await ethers.provider.getBalance(owner.address);
+      expect(ownerBalanceBefore - gasUsed + contractBalance).to.equal(
+        ownerBalanceAfter,
+      );
+      await expect(tx)
+        .to.emit(crowdfunding, 'SelfDestructed')
+        .withArgs(owner.address, contractBalance);
+    });
+
+    it('should revert if refund period not ended', async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await time.increaseTo(
+        deploymentTime +
+          (FUNDING_MONTHS + TRANSFER_REQUEST_MONTHS) * 30 * ONE_DAY +
+          46 * ONE_DAY,
+      );
+      await expect(
+        crowdfunding.connect(owner).destroyContract(),
+      ).to.be.revertedWithCustomError(crowdfunding, 'RefundPeriodNotEnded');
+    });
+
+    it('should revert if not owner', async () => {
+      await crowdfunding
+        .connect(contributor1)
+        .contribute({ value: ethers.parseEther('30') });
+      await time.increaseTo(
+        deploymentTime +
+          (FUNDING_MONTHS + TRANSFER_REQUEST_MONTHS) * 30 * ONE_DAY +
+          45 * ONE_DAY +
+          365 * ONE_DAY +
+          ONE_DAY,
+      );
+      await expect(
+        crowdfunding.connect(contributor1).destroyContract(),
+      ).to.be.revertedWithCustomError(
+        crowdfunding,
+        'OwnableUnauthorizedAccount',
+      );
     });
   });
 });
