@@ -3,9 +3,9 @@ pragma solidity ^0.8.0;
 
 import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
 import '@openzeppelin/contracts/access/Ownable.sol';
-import './CrowdfundingCommon.sol';
+import './ICrowdfunding.sol';
 
-contract Crowdfunding is ReentrancyGuard, Ownable {
+contract Crowdfunding is ICrowdfunding, ReentrancyGuard, Ownable {
     string public title;
     string public description;
     uint256 public minimumContribution;
@@ -27,19 +27,19 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         uint256 approveVote;
         uint256 totalVote;
         uint32 deadline;
-        CrowdfundingCommon.RequestStatus status;
+        ICrowdfunding.RequestStatus status;
     }
 
     FundingRequest[] public fundingRequests;
 
     modifier isActive() {
-        if (isDestroy) revert CrowdfundingCommon.ContractAlreadyDestroyed();
+        if (isDestroy) revert ICrowdfunding.ContractAlreadyDestroyed();
         _;
     }
 
     modifier onlyContributor() {
         if (contributions[msg.sender] == 0)
-            revert CrowdfundingCommon.NotContributor();
+            revert ICrowdfunding.NotContributor();
         _;
     }
 
@@ -53,14 +53,10 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         address owner
     ) Ownable(owner) {
         if (fundingMonths < 1 || fundingMonths > 6) {
-            revert CrowdfundingCommon.InvalidRange('fundingMonths', 1, 6);
+            revert ICrowdfunding.InvalidRange('fundingMonths', 1, 6);
         }
         if (transferRequestMonths < 3 || transferRequestMonths > 24) {
-            revert CrowdfundingCommon.InvalidRange(
-                'transferRequestMonths',
-                3,
-                24
-            );
+            revert ICrowdfunding.InvalidRange('transferRequestMonths', 3, 24);
         }
         title = _title;
         description = _description;
@@ -80,18 +76,16 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
 
     function contribute() public payable isActive {
         if (block.timestamp > fundingDeadline) {
-            revert CrowdfundingCommon.FundingPeriodEnded();
+            revert ICrowdfunding.FundingPeriodEnded();
         }
         if (msg.value < minimumContribution) {
-            revert CrowdfundingCommon.InsufficientContribution(
-                minimumContribution
-            );
+            revert ICrowdfunding.InsufficientContribution(minimumContribution);
         }
 
         contributions[msg.sender] += msg.value;
         totalContributions += msg.value;
 
-        emit CrowdfundingCommon.ContributionReceived(msg.sender, msg.value);
+        emit ICrowdfunding.ContributionReceived(msg.sender, msg.value);
     }
 
     function createFundingRequest(
@@ -103,27 +97,27 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
             block.timestamp < fundingDeadline ||
             block.timestamp > transferRequestDeadline
         ) {
-            revert CrowdfundingCommon.InvalidDuration(
+            revert ICrowdfunding.InvalidDuration(
                 'createFundingRequest',
                 fundingDeadline,
                 transferRequestDeadline
             );
         }
         if (totalContributions < targetFunding) {
-            revert CrowdfundingCommon.FundingGoalNotReached();
+            revert ICrowdfunding.FundingGoalNotReached();
         }
         uint256 balance = getBalance();
         if (_amount > balance) {
-            revert CrowdfundingCommon.InsufficientFunds(balance, _amount);
+            revert ICrowdfunding.InsufficientFunds(balance, _amount);
         }
         FundingRequest storage newRequest = fundingRequests.push();
         newRequest.purpose = _purpose;
         newRequest.amount = _amount;
         newRequest.recipient = _recipient;
-        newRequest.status = CrowdfundingCommon.RequestStatus.Processing;
+        newRequest.status = ICrowdfunding.RequestStatus.Processing;
         newRequest.deadline = uint32(block.timestamp + 30 days); // approximately
 
-        emit CrowdfundingCommon.FundingRequestCreated(
+        emit ICrowdfunding.FundingRequestCreated(
             fundingRequests.length - 1,
             _purpose,
             _amount,
@@ -137,10 +131,10 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
     ) public onlyContributor isActive {
         FundingRequest storage request = fundingRequests[_requestId];
         if (block.timestamp > request.deadline) {
-            revert CrowdfundingCommon.RequestVotingPeriodEnded();
+            revert ICrowdfunding.RequestVotingPeriodEnded();
         }
         if (requestsVotingHistory[_requestId][msg.sender]) {
-            revert CrowdfundingCommon.AlreadyVoted();
+            revert ICrowdfunding.AlreadyVoted();
         }
 
         requestsVotingHistory[_requestId][msg.sender] = true;
@@ -149,18 +143,18 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
             request.approveVote += 1;
         }
 
-        emit CrowdfundingCommon.VoteCast(_requestId, msg.sender, _voteFor);
+        emit ICrowdfunding.VoteCast(_requestId, msg.sender, _voteFor);
     }
 
     function finalizeRequest(
         uint32 _requestId
     ) public onlyOwner nonReentrant isActive {
         FundingRequest storage request = fundingRequests[_requestId];
-        if (request.status != CrowdfundingCommon.RequestStatus.Processing) {
-            revert CrowdfundingCommon.RequestNotProcessing(_requestId);
+        if (request.status != ICrowdfunding.RequestStatus.Processing) {
+            revert ICrowdfunding.RequestNotProcessing(_requestId);
         }
         if (block.timestamp < request.deadline) {
-            revert CrowdfundingCommon.RequestVotingPeriodNotEnded();
+            revert ICrowdfunding.RequestVotingPeriodNotEnded();
         }
 
         bool isApproved = request.totalVote != 0 &&
@@ -192,19 +186,19 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         nonReentrant
     {
         if (block.timestamp < fundingDeadline) {
-            revert CrowdfundingCommon.FundingPeriodRefundIsNotAllowed();
+            revert ICrowdfunding.FundingPeriodRefundIsNotAllowed();
         }
         if (
             block.timestamp > fundingDeadline &&
             totalContributions >= targetFunding
         ) {
-            revert CrowdfundingCommon.FundingGoalReached();
+            revert ICrowdfunding.FundingGoalReached();
         }
         uint256 refundAmount = contributions[msg.sender];
 
         contributions[msg.sender] = 0;
         payable(msg.sender).transfer(refundAmount);
-        emit CrowdfundingCommon.RefundTransferred(msg.sender, refundAmount);
+        emit ICrowdfunding.RefundTransferred(msg.sender, refundAmount);
     }
 
     function refundRemainingBalance()
@@ -217,7 +211,7 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
             block.timestamp < refundingStart ||
             block.timestamp >= refundingDeadline
         ) {
-            revert CrowdfundingCommon.InvalidDuration(
+            revert ICrowdfunding.InvalidDuration(
                 'refund',
                 refundingStart,
                 refundingDeadline
@@ -230,15 +224,15 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
 
         contributions[msg.sender] = 0;
         payable(msg.sender).transfer(refundAmount);
-        emit CrowdfundingCommon.RefundTransferred(msg.sender, refundAmount);
+        emit ICrowdfunding.RefundTransferred(msg.sender, refundAmount);
     }
 
     function destroyContract() public onlyOwner {
         if (block.timestamp <= refundingDeadline) {
-            revert CrowdfundingCommon.RefundPeriodNotEnded(refundingDeadline);
+            revert ICrowdfunding.RefundPeriodNotEnded(refundingDeadline);
         }
         uint256 remainingBalance = address(this).balance;
-        emit CrowdfundingCommon.SelfDestructed(owner(), remainingBalance);
+        emit ICrowdfunding.SelfDestructed(owner(), remainingBalance);
         isDestroy = true;
         payable(owner()).transfer(remainingBalance);
     }
@@ -249,19 +243,13 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
     ) internal {
         uint256 balance = getBalance();
         if (balance < request.amount) {
-            revert CrowdfundingCommon.InsufficientFunds(
-                balance,
-                request.amount
-            );
+            revert ICrowdfunding.InsufficientFunds(balance, request.amount);
         }
-        request.status = CrowdfundingCommon.RequestStatus.Payout;
+        request.status = ICrowdfunding.RequestStatus.Payout;
         request.recipient.transfer(request.amount);
 
-        emit CrowdfundingCommon.FundingRequestUpdated(
-            _requestId,
-            request.status
-        );
-        emit CrowdfundingCommon.PayoutCompleted(
+        emit ICrowdfunding.FundingRequestUpdated(_requestId, request.status);
+        emit ICrowdfunding.PayoutCompleted(
             _requestId,
             request.amount,
             request.recipient
@@ -272,10 +260,7 @@ contract Crowdfunding is ReentrancyGuard, Ownable {
         uint32 _requestId,
         FundingRequest storage request
     ) internal {
-        request.status = CrowdfundingCommon.RequestStatus.Rejected;
-        emit CrowdfundingCommon.FundingRequestUpdated(
-            _requestId,
-            request.status
-        );
+        request.status = ICrowdfunding.RequestStatus.Rejected;
+        emit ICrowdfunding.FundingRequestUpdated(_requestId, request.status);
     }
 }
